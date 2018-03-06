@@ -51,23 +51,6 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 siteContext.Load(rootWeb);
                 siteContext.ExecuteQueryRetry();
 
-                // Upload available page layouts
-                foreach (PageLayout pageLayout in template.Publishing.PageLayouts)
-                {
-                    var fileName = pageLayout.Path.Split('/').LastOrDefault();
-                    var container = template.Connector.GetContainer();
-                    var stream = template.Connector.GetFileStream(fileName, container);
-
-                    // Get Masterpage catalog fodler
-                    var masterpageCatalog = context.Site.GetCatalog((int)ListTemplateType.MasterPageCatalog);
-                    context.Load(masterpageCatalog);
-                    context.ExecuteQuery();
-
-                    var folder = masterpageCatalog.RootFolder;
-
-                    UploadFile(template, pageLayout, folder, stream);
-                }
-
                 foreach (PublishingPage page in template.Publishing.PublishingPages)
                 {
 
@@ -379,12 +362,14 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             try
             {
                 targetFile = folder.UploadFile(fileName, stream, true);
+                targetFile.PublishFileToLevel(Microsoft.SharePoint.Client.FileLevel.Published);
             }
             catch (Exception)
             {
                 //The file name might contain encoded characters that prevent upload. Decode it and try again.
                 fileName = WebUtility.UrlDecode(fileName);
                 targetFile = folder.UploadFile(fileName, stream, true);
+                targetFile.PublishFileToLevel(Microsoft.SharePoint.Client.FileLevel.Published);
             }
             return targetFile;
         }
@@ -499,6 +484,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 {
                     if (layout.Attribute("url") != null)
                     {
+                        // Ensure layout is in Publishing's PageLayout
                         var pageLayout = new PageLayout();
 
                         var pageLayoutFullPath = layout.Attribute("url").Value;
@@ -510,33 +496,71 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                         }
                         template.Publishing.PageLayouts.Add(pageLayout);
 
-                        // Page layouts are always uploaded on root web
-                        var siteContext = web.Context.GetSiteCollectionContext();
-                        var rootWeb = siteContext.Site.RootWeb;
-                        siteContext.Load(rootWeb);
-                        siteContext.ExecuteQueryRetry();
-                        rootWeb.EnsureProperty(w => w.ServerRelativeUrl);
-                        var spFile = rootWeb.GetFileByServerRelativeUrl(rootWeb.ServerRelativeUrl + "/" + pageLayoutFullPath);
-                        var fileStream = spFile.OpenBinaryStream();
-                        rootWeb.Context.Load(spFile);
-                        rootWeb.Context.Load(spFile.ListItemAllFields);
-                        rootWeb.Context.ExecuteQuery();
+                        if (isRootWeb)
+                        {
+                            // Download layout file
+                            var siteContext = web.Context.GetSiteCollectionContext();
+                            var rootWeb = siteContext.Site.RootWeb;
+                            siteContext.Load(rootWeb);
+                            siteContext.ExecuteQueryRetry();
+                            rootWeb.EnsureProperty(w => w.ServerRelativeUrl);
+                            var spFile = rootWeb.GetFileByServerRelativeUrl(rootWeb.ServerRelativeUrl + "/" + pageLayoutFullPath);
+                            var fileStream = spFile.OpenBinaryStream();
+                            rootWeb.Context.Load(spFile);
+                            rootWeb.Context.Load(spFile.ListItemAllFields);
+                            rootWeb.Context.ExecuteQuery();
 
-                        try
-                        {
-                            template.Connector.SaveFileStream(spFile.Name, fileStream.Value);
-                        }
-                        catch (Exception)
-                        {
-                            //The file name might contain encoded characters that prevent upload. Decode it and try again.
-                            var fileName = spFile.Name.Replace("&", "");
-                            template.Connector.SaveFileStream(spFile.Name, fileStream.Value);
+                            try
+                            {
+                                template.Connector.SaveFileStream(spFile.Name, fileStream.Value);
+                            }
+                            catch (Exception)
+                            {
+                                //The file name might contain encoded characters that prevent upload. Decode it and try again.
+                                var fileName = spFile.Name.Replace("&", "");
+                                template.Connector.SaveFileStream(spFile.Name, fileStream.Value);
+                            }
+
+                            // Create File entry for template
+                            Model.File file = CreateLayoutFileItem(rootWeb, spFile);
+                            template.Files.Add(file);
                         }
                     }
 
                 }
             }
             return template;
+        }   
+
+        private Model.File CreateLayoutFileItem(Web rootWeb, File spFile)
+        {
+            var layoutItem = spFile.ListItemAllFields;
+            rootWeb.Context.Load(layoutItem);
+            rootWeb.Context.ExecuteQueryRetry();
+            var file = new OfficeDevPnP.Core.Framework.Provisioning.Model.File();
+            file.Folder = "{masterpagecatalog}";
+            file.Overwrite = true;
+            file.Level = Model.FileLevel.Published;
+            file.Src = spFile.Name;
+            var previewImage = layoutItem["PublishingPreviewImage"] as FieldUrlValue;
+            if (previewImage != null) {
+                previewImage.Url = TokenizeLayoutProperty(previewImage.Url, rootWeb.Url, rootWeb.ServerRelativeUrl);
+                file.Properties.Add("PublishingPreviewImage", previewImage.Url);
+            }
+            file.Properties.Add("Title", layoutItem["Title"] as string);
+            file.Properties.Add("PublishingAssociatedContentType", layoutItem["PublishingAssociatedContentType"] as string);
+            return file;
+        }
+
+        private string TokenizeLayoutProperty(string value, string rootWebUrl, string rootWebServerRelativeUrl)
+        {
+            var result = value;
+            result = result.Replace(rootWebUrl + "/_catalogs/masterpage", "{masterpagecatalog}");
+            result = result.Replace(rootWebServerRelativeUrl.TrimEnd('/') + "/_catalogs/masterpage", "{masterpagecatalog}");
+            result = result.Replace("_catalogs/masterpage", "{masterpagecatalog}");
+            result = result.Replace(rootWebUrl, "{sitecollection}");
+            result = result.Replace(rootWebServerRelativeUrl, "{sitecollection}");
+            return result;
         }
 
         /// <summary>
@@ -598,8 +622,10 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                                 val = val.Replace(url, string.Empty).Replace(rootWeb.Url, string.Empty);
                                 namelayout = val.Replace("/_catalogs/masterpage/", string.Empty).Split('.')[0];
                                 properties.Add(property.Key.ToString(), val);
-                                // Add associated page layout to the PageLayout section of the template
-                                template = GetAssociatedPageLayouts(ctx, template, web, val, relativurl, isRootWeb);
+                                if (isRootWeb)
+                                {
+                                    template = GetAssociatedPageLayouts(ctx, template, web, val, relativurl, isRootWeb);
+                                }
                             }
                         }
                     }
@@ -746,16 +772,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 {
                     string layoutPath = url.Replace("_catalogs/masterpage/", String.Empty).TrimStart('/');
                     // Check if page layout is not already defined in the PageLayout section of the template
-                    if (!TemplateContainPageLayouts(template, layoutPath))
+                    if (!FilesContainPageLayouts(template, layoutPath))
                     {
-                        OfficeDevPnP.Core.Framework.Provisioning.Model.PageLayout targetFile =
-                        new OfficeDevPnP.Core.Framework.Provisioning.Model.PageLayout
-                        {
-                            IsDefault = false,
-                            Path = layoutPath
-                        };
-                        template.Publishing.PageLayouts.Add(targetFile);
-
                         var rootWeb = web;
                         if (!isRootWeb)
                         {
@@ -781,6 +799,10 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                             var fileName = spFile.Name.Replace("&", "");
                             template.Connector.SaveFileStream(spFile.Name, fileStream.Value);
                         }
+
+                        // Create File entry for template
+                        Model.File file = CreateLayoutFileItem(rootWeb, spFile);
+                        template.Files.Add(file);
                     }
                 }
             }
@@ -791,17 +813,11 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             return template;
         }
 
-        /// <summary>
-        /// Check if page layout already exist in the PageLayouts section of the template
-        /// </summary>
-        /// <param name="template">Provisionning template</param>
-        /// <param name="val">Nale of the layout</param>
-        /// <returns></returns>
-        private bool TemplateContainPageLayouts(ProvisioningTemplate template, string val)
+        private bool FilesContainPageLayouts(ProvisioningTemplate template, string src)
         {
-            foreach (var layout in template.Publishing.PageLayouts)
+            foreach (var file in template.Files)
             {
-                if (layout.Path == val)
+                if (file.Src == src)
                 {
                     return true;
                 }
