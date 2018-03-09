@@ -535,7 +535,9 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
         private Model.File CreateLayoutFileItem(Web rootWeb, File spFile)
         {
             var layoutItem = spFile.ListItemAllFields;
+            var layoutCt = layoutItem.ContentType;
             rootWeb.Context.Load(layoutItem);
+            rootWeb.Context.Load(layoutCt);
             rootWeb.Context.ExecuteQueryRetry();
             var file = new OfficeDevPnP.Core.Framework.Provisioning.Model.File();
             file.Folder = "{masterpagecatalog}";
@@ -549,6 +551,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             }
             file.Properties.Add("Title", layoutItem["Title"] as string);
             file.Properties.Add("PublishingAssociatedContentType", layoutItem["PublishingAssociatedContentType"] as string);
+            file.Properties.Add("ContentType", layoutCt.Name);
             return file;
         }
 
