@@ -2326,6 +2326,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                     list = ExtractWebhooks(siteList, list);
 #endif
 
+                    list = ExtractFolders(web, siteList, list);
+
                     list.Security = siteList.GetSecurity();
 
                     list = ExtractInformationRightsManagement(web, siteList, list, creationInfo, template);
@@ -2717,6 +2719,40 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 list.IRMSettings.LicenseCacheExpireDays = siteList.InformationRightsManagementSettings.LicenseCacheExpireDays;
                 list.IRMSettings.PolicyDescription = siteList.InformationRightsManagementSettings.PolicyDescription;
                 list.IRMSettings.PolicyTitle = siteList.InformationRightsManagementSettings.PolicyTitle;
+            }
+
+            return list;
+        }
+
+        private static Model.Folder ExtractFolder(Web web, Microsoft.SharePoint.Client.Folder siteFolder)
+        {
+            web.Context.Load(siteFolder);
+            web.Context.Load(siteFolder, f => f.Folders);
+            web.Context.ExecuteQueryRetry();
+            Model.Folder extractedFolder = new Model.Folder { Name = siteFolder.Name };
+            foreach(Microsoft.SharePoint.Client.Folder siteSubFolder in siteFolder.Folders)
+            {
+                extractedFolder.Folders.Add(ExtractFolder(web,siteSubFolder));
+            }
+            return extractedFolder;
+        }
+
+        private static ListInstance ExtractFolders(Web web, List siteList, ListInstance list)
+        {
+            web.Context.Load(siteList, l => l.RootFolder.Folders, l => l.BaseType, l => l.IsSystemList);
+            web.Context.ExecuteQueryRetry();
+
+            if (siteList.BaseType != BaseType.DocumentLibrary || siteList.IsSystemList)
+            {
+                return list;
+            }
+
+            foreach (Microsoft.SharePoint.Client.Folder siteFolder in siteList.RootFolder.Folders)
+            {
+                if (siteFolder.Name.ToLower() != "forms")
+                {
+                    list.Folders.Add(ExtractFolder(web, siteFolder));
+                }
             }
 
             return list;
