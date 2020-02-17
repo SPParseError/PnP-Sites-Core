@@ -35,7 +35,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                         s => s.AllowCreateDeclarativeWorkflow,
                         s => s.AllowSaveDeclarativeWorkflowAsTemplate,
                         s => s.AllowSavePublishDeclarativeWorkflow,
-                        s => s.SocialBarOnSitePagesDisabled
+                        s => s.SocialBarOnSitePagesDisabled,
+                        s => s.SearchBoxInNavBar
                         );
 
                     // Configure the output SiteSettings object
@@ -46,6 +47,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                     siteSettings.AllowSaveDeclarativeWorkflowAsTemplate = site.AllowSaveDeclarativeWorkflowAsTemplate;
                     siteSettings.AllowSavePublishDeclarativeWorkflow = site.AllowSavePublishDeclarativeWorkflow;
                     siteSettings.SocialBarOnSitePagesDisabled = site.SocialBarOnSitePagesDisabled;
+                    siteSettings.SearchBoxInNavBar = (SearchBoxInNavBar)Enum.Parse(typeof(SearchBoxInNavBar), site.SearchBoxInNavBar.ToString());
+                    siteSettings.SearchCenterUrl = site.RootWeb.GetSiteCollectionSearchCenterUrl();
 
                     // Update the provisioning template accordingly
                     template.SiteSettings = siteSettings;
@@ -84,6 +87,19 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                         {
                             site.SocialBarOnSitePagesDisabled = template.SiteSettings.SocialBarOnSitePagesDisabled;
                             isDirty = true;
+                        }
+
+                        site.EnsureProperty(s => s.SearchBoxInNavBar);
+                        if (site.SearchBoxInNavBar.ToString() != template.SiteSettings.SearchBoxInNavBar.ToString())
+                        {
+                            site.SearchBoxInNavBar = (SearchBoxInNavBarType)Enum.Parse(typeof(SearchBoxInNavBarType), template.SiteSettings.SearchBoxInNavBar.ToString(), true);
+                            isDirty = true;
+                        }
+
+                        if (!string.IsNullOrEmpty(template.SiteSettings.SearchCenterUrl) &&
+                            site.RootWeb.GetSiteCollectionSearchCenterUrl() != template.SiteSettings.SearchCenterUrl)
+                        {
+                            site.RootWeb.SetSiteCollectionSearchCenterUrl(template.SiteSettings.SearchCenterUrl);
                         }
 
                         // And save on SharePoint, if really needed
