@@ -157,6 +157,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                     // We stop here unless we reached the last provisioning stop of the list
                     if (step == FieldAndListProvisioningStepHelper.Step.ListSettings)
                     {
+                        parser.RebuildListTokens(web);
+
                         #region Default Field Values
 
                         foreach (var listInfo in processedLists)
@@ -172,6 +174,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                         {
                             ProcessViews(web, parser, scope, listInfo);
                         }
+
+                        parser.RebuildListTokens(web);
 
                         #endregion Views
 
@@ -515,7 +519,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                             {
                                 ct.FieldLinks.Add(new FieldLinkCreationInformation { Field = field });
                                 ct.Update(false);
-                                listInfo.SiteList.Context.ExecuteQuery();
+                                listInfo.SiteList.Context.ExecuteQueryRetry();
                             }
                         }
                     }
@@ -732,6 +736,14 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 if (urlHasValue)
                 {
                     //restore original title
+                    if (string.Equals(createdView.Title, viewTitle, StringComparison.CurrentCultureIgnoreCase))
+                    {
+                        // The title field will only be updated if a change other than case is applied
+                        createdView.Title = $"{viewTitle}_temp";
+                        createdView.Title = viewTitle;
+                        createdView.Update();
+                        web.Context.ExecuteQueryRetry();
+                    }
                     createdView.Title = viewTitle;
                     createdView.Update();
                 }

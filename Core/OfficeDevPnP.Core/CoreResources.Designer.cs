@@ -514,7 +514,7 @@ namespace OfficeDevPnP.Core {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to The argument must be a single file name and cannot contain path characters..
+        ///   Looks up a localized string similar to The argument must be a single file name and cannot contain path characters. Value:&apos;{0}&apos;.
         /// </summary>
         internal static string FileFolderExtensions_UploadFile_The_argument_must_be_a_single_file_name_and_cannot_contain_path_characters_ {
             get {
@@ -1260,15 +1260,6 @@ namespace OfficeDevPnP.Core {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Content Type {0} with ID {1} cannot be updated because delta handling for DocumentSets is on hold..
-        /// </summary>
-        internal static string Provisioning_ObjectHandlers_ContentTypes_DocumentSet_DeltaHandling_OnHold {
-            get {
-                return ResourceManager.GetString("Provisioning_ObjectHandlers_ContentTypes_DocumentSet_DeltaHandling_OnHold", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   Looks up a localized string similar to Failed to add &apos;{1}&apos; as DocumentTemplate to ContentType &apos;{0}&apos;.
         /// </summary>
         internal static string Provisioning_ObjectHandlers_ContentTypes_ErrorDocumentTemplate {
@@ -1361,11 +1352,12 @@ namespace OfficeDevPnP.Core {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Existing content type with Id {0} and name {1} will not be updated because it&apos;s marked as sealed and the template is not changing the sealed value..
+        ///   Looks up a localized string similar to Existing content type with Id {0} and name {1} will not be updated because it&apos;s marked as sealed or read only and the template is not changing the value..
         /// </summary>
-        internal static string Provisioning_ObjectHandlers_ContentTypes_Updating_existing_Content_Type_Sealed {
+        internal static string Provisioning_ObjectHandlers_ContentTypes_Updating_existing_Content_Type_SealedOrReadOnly {
             get {
-                return ResourceManager.GetString("Provisioning_ObjectHandlers_ContentTypes_Updating_existing_Content_Type_Sealed", resourceCulture);
+                return ResourceManager.GetString("Provisioning_ObjectHandlers_ContentTypes_Updating_existing_Content_Type_SealedOrR" +
+                        "eadOnly", resourceCulture);
             }
         }
         
@@ -2860,6 +2852,15 @@ namespace OfficeDevPnP.Core {
         internal static string TimerJob_AddSite_InvalidUrl {
             get {
                 return ResourceManager.GetString("TimerJob_AddSite_InvalidUrl", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Timer job authentication set to type AccessToken.
+        /// </summary>
+        internal static string TimerJob_Authentication_AccessToken {
+            get {
+                return ResourceManager.GetString("TimerJob_Authentication_AccessToken", resourceCulture);
             }
         }
         

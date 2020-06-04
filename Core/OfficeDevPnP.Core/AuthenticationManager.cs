@@ -20,6 +20,7 @@ using OfficeDevPnP.Core.Utilities.Async;
 using System.Net.Http;
 using Newtonsoft.Json.Linq;
 using OfficeDevPnP.Core.Utilities.Context;
+using System.Web;
 
 namespace OfficeDevPnP.Core
 {
@@ -43,7 +44,9 @@ namespace OfficeDevPnP.Core
     {
         private const string SHAREPOINT_PRINCIPAL = "00000003-0000-0ff1-ce00-000000000000";
 
+#if !NETSTANDARD2_0
         private SharePointOnlineCredentials sharepointOnlineCredentials;
+#endif
         private string appOnlyAccessToken;
         private string azureADCredentialsToken;
         private object tokenLock = new object();
@@ -55,7 +58,7 @@ namespace OfficeDevPnP.Core
         private string _clientId;
         private Uri _redirectUri;
 
-        #region Construction
+#region Construction
         public AuthenticationManager()
         {
 #if !ONPREMISES
@@ -67,6 +70,8 @@ namespace OfficeDevPnP.Core
 
 
         #region Authenticating against SharePoint Online using credentials or app-only
+
+#if !NETSTANDARD2_0
         /// <summary>
         /// Returns a SharePointOnline ClientContext object
         /// </summary>
@@ -105,6 +110,7 @@ namespace OfficeDevPnP.Core
 
             return ctx;
         }
+#endif
 
         /// <summary>
         /// Returns an app only ClientContext object
@@ -147,6 +153,10 @@ namespace OfficeDevPnP.Core
             ClientContext clientContext = Utilities.TokenHelper.GetClientContextWithAccessToken(siteUrl, appOnlyAccessToken);
 #if !ONPREMISES || SP2016 || SP2019
             clientContext.DisableReturnValueCache = true;
+#endif
+
+#if NETSTANDARD2_0
+            clientContext.FormDigestHandlingEnabled = false;
 #endif
 
             ClientContextSettings clientContextSettings = new ClientContextSettings()
@@ -621,10 +631,10 @@ namespace OfficeDevPnP.Core
         }
 #endif
 
-        #endregion
+#endregion
 
-        #region Authenticating against SharePoint Online using Azure AD based authentication
-#if !ONPREMISES && !NETSTANDARD2_0
+#region Authenticating against SharePoint Online using Azure AD based authentication
+#if !ONPREMISES
 
         /// <summary>
         /// Returns a SharePoint ClientContext using Azure Active Directory credential authentication. This depends on the SPO Management Shell app being registered in your Azure AD.
@@ -632,11 +642,12 @@ namespace OfficeDevPnP.Core
         /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
         /// <param name="userPrincipalName">The user id</param>
         /// <param name="userPassword">The user's password as a secure string</param>
+        /// <param name="environment">SharePoint environment being used</param>
         /// <returns>Client context object</returns>
-        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, SecureString userPassword)
+        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, SecureString userPassword, AzureEnvironment environment = AzureEnvironment.Production)
         {
             string password = new System.Net.NetworkCredential(string.Empty, userPassword).Password;
-            return GetAzureADCredentialsContext(siteUrl, userPrincipalName, password);
+            return GetAzureADCredentialsContext(siteUrl, userPrincipalName, password, environment);
         }
 
         /// <summary>
@@ -645,8 +656,9 @@ namespace OfficeDevPnP.Core
         /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
         /// <param name="userPrincipalName">The user id</param>
         /// <param name="userPassword">The user's password as a string</param>
+        /// <param name="environment">SharePoint environment being used</param>
         /// <returns>Client context object</returns>
-        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, string userPassword)
+        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, string userPassword, AzureEnvironment environment = AzureEnvironment.Production)
         {
             Log.Info(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManager_GetContext, siteUrl);
             Log.Debug(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManager_TenantUser, userPrincipalName);
@@ -660,7 +672,7 @@ namespace OfficeDevPnP.Core
 #endif
             clientContext.ExecutingWebRequest += (sender, args) =>
             {
-                EnsureAzureADCredentialsToken(resourceUri, userPrincipalName, userPassword);
+                EnsureAzureADCredentialsToken(resourceUri, userPrincipalName, userPassword, environment);
                 args.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + azureADCredentialsToken;
             };
 
@@ -684,13 +696,14 @@ namespace OfficeDevPnP.Core
         /// <param name="resourceUri">Resouce to request access for</param>
         /// <param name="username">User id</param>
         /// <param name="password">Password</param>
+        /// <param name="environment">SharePoint environment being used</param>
         /// <returns>Acces token</returns>
-        public static async Task<string> AcquireTokenAsync(string resourceUri, string username, string password)
+        public static async Task<string> AcquireTokenAsync(string resourceUri, string username, string password, AzureEnvironment environment)
         {
             HttpClient client = new HttpClient();
-            string tokenEndpoint = "https://login.microsoftonline.com/common/oauth2/token";
+            string tokenEndpoint = $"{new AuthenticationManager().GetAzureADLoginEndPoint(environment)}/common/oauth2/token";
 
-            var body = $"resource={resourceUri}&client_id=9bc3ab49-b65d-410a-85ad-de819febfddc&grant_type=password&username={username}&password={password}";
+            var body = $"resource={resourceUri}&client_id=9bc3ab49-b65d-410a-85ad-de819febfddc&grant_type=password&username={HttpUtility.UrlEncode(username)}&password={HttpUtility.UrlEncode(password)}";
             var stringContent = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
 
             var result = await client.PostAsync(tokenEndpoint, stringContent).ContinueWith<string>((response) =>
@@ -699,11 +712,15 @@ namespace OfficeDevPnP.Core
             });
 
             JObject jobject = JObject.Parse(result);
+
+            // Ensure the resulting JSON could be parsed and that it doesn't contain an error. If incorrect credentials have been provided, this will not be the case and we return NULL to indicate not to have an access token.
+            if (jobject == null || jobject["error"] != null) return null;
+
             var token = jobject["access_token"].Value<string>();
             return token;
         }
 
-        private void EnsureAzureADCredentialsToken(string resourceUri, string userPrincipalName, string userPassword)
+        private void EnsureAzureADCredentialsToken(string resourceUri, string userPrincipalName, string userPassword, AzureEnvironment environment)
         {
             if (azureADCredentialsToken == null)
             {
@@ -712,7 +729,7 @@ namespace OfficeDevPnP.Core
                     if (azureADCredentialsToken == null)
                     {
 
-                        String accessToken = Task.Run(() => AcquireTokenAsync(resourceUri, userPrincipalName, userPassword)).GetAwaiter().GetResult();
+                        String accessToken = Task.Run(() => AcquireTokenAsync(resourceUri, userPrincipalName, userPassword, environment)).GetAwaiter().GetResult();
                         ThreadPool.QueueUserWorkItem(obj =>
                         {
                             try
@@ -820,7 +837,6 @@ namespace OfficeDevPnP.Core
             return clientContext;
         }
 
-#if !NETSTANDARD2_0
         async void clientContext_NativeApplicationExecutingWebRequest(object sender, WebRequestEventArgs e)
         {
             var host = new Uri(_contextUrl);
@@ -831,9 +847,7 @@ namespace OfficeDevPnP.Core
                 e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + ar.AccessToken;
             }
         }
-#endif
 
-#if !NETSTANDARD2_0
         private async Task<AuthenticationResult> AcquireNativeApplicationTokenAsync(string authContextUrl, string resourceId)
         {
             AuthenticationResult ar = null;
@@ -877,8 +891,11 @@ namespace OfficeDevPnP.Core
             {
                 try
                 {
+#if !NETSTANDARD2_0
                     ar = await _authContext.AcquireTokenAsync(resourceId, _clientId, _redirectUri, new PlatformParameters(PromptBehavior.Always));
-
+#else
+                    ar = await _authContext.AcquireTokenAsync(resourceId, _clientId, _redirectUri, new PlatformParameters());
+#endif
                 }
                 catch (Exception acquireEx)
                 {
@@ -888,9 +905,7 @@ namespace OfficeDevPnP.Core
 
             return ar;
         }
-#endif
 
-#if !NETSTANDARD2_0
         /// <summary>
         /// Returns a SharePoint ClientContext using Azure Active Directory App Only Authentication. This requires that you have a certificated created, and updated the key credentials key in the application manifest in the azure AD accordingly.
         /// </summary>
@@ -908,9 +923,7 @@ namespace OfficeDevPnP.Core
 
             return GetAzureADAppOnlyAuthenticatedContext(siteUrl, clientId, tenant, cert, environment);
         }
-#endif
 
-#if !NETSTANDARD2_0
 
         /// <summary>
         /// Returns a SharePoint ClientContext using Azure Active Directory App Only Authentication. This requires that you have a certificated created, and updated the key credentials key in the application manifest in the azure AD accordingly.
@@ -928,9 +941,7 @@ namespace OfficeDevPnP.Core
 
             return GetAzureADAppOnlyAuthenticatedContext(siteUrl, clientId, tenant, certificatePath, certPassword, environment);
         }
-#endif
 
-#if !NETSTANDARD2_0
 
         /// <summary>
         /// Returns a SharePoint ClientContext using Azure Active Directory App Only Authentication. This requires that you have a certificated created, and updated the key credentials key in the application manifest in the azure AD accordingly.
@@ -956,9 +967,7 @@ namespace OfficeDevPnP.Core
 
             return GetAzureADAppOnlyAuthenticatedContext(siteUrl, clientId, tenant, cert, environment);
         }
-#endif
 
-#if !NETSTANDARD2_0
         /// <summary>
         /// Returns a SharePoint ClientContext using Azure Active Directory App Only Authentication. This requires that you have a certificated created, and updated the key credentials key in the application manifest in the azure AD accordingly.
         /// </summary>
@@ -1006,7 +1015,6 @@ namespace OfficeDevPnP.Core
 
             return clientContext;
         }
-#endif
 
         /// <summary>
         /// Get's the Azure AD login end point for the given environment
@@ -1019,7 +1027,7 @@ namespace OfficeDevPnP.Core
             {
                 case AzureEnvironment.Production:
                     {
-                        return "https://login.windows.net";
+                        return "https://login.microsoftonline.com";
                     }
                 case AzureEnvironment.Germany:
                     {
@@ -1039,14 +1047,14 @@ namespace OfficeDevPnP.Core
                     }
                 default:
                     {
-                        return "https://login.windows.net";
+                        return "https://login.microsoftonline.com";
                     }
             }
         }
-        #endregion
+#endregion
 
 #if !NETSTANDARD2_0
-        #region Authenticating against SharePoint on-premises using ADFS based authentication
+#region Authenticating against SharePoint on-premises using ADFS based authentication
         /// <summary>
         /// Returns a SharePoint on-premises ClientContext for sites secured via ADFS
         /// </summary>
@@ -1255,7 +1263,7 @@ namespace OfficeDevPnP.Core
             }
         }
 
-        #endregion
+#endregion
 #endif
     }
 }

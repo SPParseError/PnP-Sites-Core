@@ -6,7 +6,82 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## [3.17.2002.0 - February 2020 release]
+## [Unreleased]
+
+### Added
+
+### Changed
+
+## [3.20.2005.2 - May 2020 release - intermediate release]
+
+### Changed
+
+- Fix: Modern page translation api's did not take in account the access token
+
+## [3.20.2005.0 - May 2020 release]
+
+### Added
+
+- Adding support for retrieval of Users from Azure Active Directory #2622 [koenzomers - Koen Zomers]
+- Add YAML metadata for PnP-Sites-Core #2631 [nokafor - Sylvia Okafor]
+- Added UnifiedGroupsUtility.RenewUnifiedGroup #2630 [koenzomers - Koen Zomers]
+- Added GetNestedUnifiedGroupMembers method #2377 [anoopt - Anoop Tatti]
+
+### Changed
+
+- Fix: Bug while provisioning teams without security settings in the template got fixed
+- Fix: ExtractClientSidePage check isNews when PromotedState is null #2618 [czullu - Christian Zuellig]
+- Fix: Handle special char in SiteTile beeing replaced by _ for SP-Groupnames #2617 [czullu - Christian Zuellig]
+- Fix: NullReferenceException in case the authentication with credentials fails #2634 [koenzomers - Koen Zomers]
+- Fix: Enable changing view title casing #2584 [jensotto - Jens Otto Hatlevold]
+
+## [3.20.2004.0 - April 2020 release]
+
+### Added
+
+- Added EnsureAppCatalogAsync extension method on Tenant to create and register a new app catalog
+- Added support for creating modern team sites with app-only access token
+- Added functionality to allow PnP Templates to update docsets #2600 [koenzomers - Koen Zomers]
+
+### Changed
+
+- Fix: IsChildOfDocumentSetContentType in ContentType Provisioning #2585 [koenzomers - Koen Zomers]
+- Fix: UnitTest SP2013 - ResetFileToPreviousVersionTest #2577 [gszdev]
+- Fix: Resx-Issue if names contain char handled by Regex.Escape #2578 [czullu - Christian Zuellig]
+- Improve logging when waiting for a site collection to be created #2581 [jackpoz - Giacomo Pozzoni]
+- Fix: Encoding in fileuniqueid token dedection in navigationlink #2579 [czullu - Christian Zuellig]
+- Fix: Bugfix for authenticating with credentials containing special characters #2599 [koenzomers - Koen Zomers]
+- Fix: Added HasTeam boolean to UnifiedGroupEntity #2614 [koenzomers - Koen Zomers]
+- Fix: Make all the Framework Handler use ExecuteQueryRetry #2590 [czullu - Christian Zuellig]
+- For AzureFunctions allow SharePointPnPUserAgent to be set in Environment #2591 [czullu - Christian Zuellig]
+- Make PnPHttpProvider respect SharePointPnPUserAgent setting #2592 [czullu - Christian Zuellig]
+- Fix: Additional check to determine whether theme exists in the tenant #2603 [gautamdsheth - Gautam Sheth]
+- Fix: Client side web part parser description was mapped to title #2606 [czullu - Christian Zuellig]
+- Fix: Site Logo file url needs be stored url decoded in the template #2608 [czullu - Christian Zuellig]
+- Fix: Set file properties before checkin/publish. #2610 [czullu - Christian Zuellig]
+- Fix: Resolves issue where sharing settings defaults to disbled even when not set in the template #2596 [SteveClements - Steve Clements]
+- Fix: ensuring correct usage of EnsureProperties method #2602 [gautamdsheth - Gautam Sheth]
+
+## [3.19.2003.0 - March 2020 release]
+
+### Added
+
+- Option to use an access token in the TimerJob framework
+- Option specify the Azure environment being used by the timerjob framework
+
+### Changed
+
+- Respect the set Azure environment in the GetAzureADCredentialsContext AuthenticationManager method
+- Added fallback to check for web setting on search redirect url on a root site if sc setting is empty in the SearchExtensions SetWebSearchCenterUrl method
+- Fix: Improve error message when uploading a file with invalid characters in the file name #2575 [jackpoz - Giacomo Pozzoni]
+- Fix: Catch WebException with Timeout status to fix timeout on update field and push changes #2557 [NicolajHedeager - Nicolaj Hedeager Larsen]
+- Fix: Ensure null value is never set for MaterPageUrl and ColorPaletteUrl #2558 [NicolajHedeager - Nicolaj Hedeager Larsen]
+- Fix: Added SP2019 RTM CSOM Assemblies #2573 [jensotto - Jens Otto Hatlevold]
+- Fix: Skip update of read only content type unless readonly is changed to false #2569 [NicolajHedeager - Nicolaj Hedeager Larsen]
+- Fix: Added list content type id token to support specifying list content types in the NewDocumentTemplates node for the default view #2570 [jensotto - Jens Otto Hatlevold]
+- Fix: Added guid prefix in webhook API call #2574 [gzukula]
+
+## [3.18.2002.0 - February 2020 release]
 
 ### Added
 
