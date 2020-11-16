@@ -53,9 +53,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
         {
             using (var scope = new PnPMonitoredScope(this.Name))
             {
-                web.IsMultilingual = true;
                 web.Context.Load(web, w => w.SupportedUILanguageIds);
-                web.Update();
                 web.Context.ExecuteQueryRetry();
 
                 var isDirty = false;
