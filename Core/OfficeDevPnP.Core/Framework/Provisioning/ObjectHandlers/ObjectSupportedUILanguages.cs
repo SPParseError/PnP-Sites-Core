@@ -51,7 +51,6 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
 
         public override TokenParser ProvisionObjects(Web web, ProvisioningTemplate template, TokenParser parser, ProvisioningTemplateApplyingInformation applyingInformation)
         {
-            // Provision
             using (var scope = new PnPMonitoredScope(this.Name))
             {
                 web.Context.Load(web, w => w.SupportedUILanguageIds);
