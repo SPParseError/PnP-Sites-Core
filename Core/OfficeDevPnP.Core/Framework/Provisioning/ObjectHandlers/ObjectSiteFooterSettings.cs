@@ -13,6 +13,8 @@ using Newtonsoft.Json;
 using System.Text.RegularExpressions;
 using System.IO;
 using System.Web;
+using System.Globalization;
+using OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers.Extensions;
 
 namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
 {
@@ -33,12 +35,16 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
         {
             using (var scope = new PnPMonitoredScope(this.Name))
             {
-                web.EnsureProperties(w => w.FooterEnabled, w => w.ServerRelativeUrl, w => w.Url);
+                web.EnsureProperties(w => w.FooterEnabled, w => w.ServerRelativeUrl, w => w.Url, w => w.Language);
+                var defaultCulture = new CultureInfo((int)web.Language);
 
-                var footer = new SiteFooter();
+                var footer = new SiteFooter
+                {
+                    Enabled = web.FooterEnabled
+                };
 
-                footer.Enabled = web.FooterEnabled;
-                var structureString = web.ExecuteGet($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'").GetAwaiter().GetResult();
+                //get them in the default language of the Site
+                var structureString = web.ExecuteGetAsync($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'", defaultCulture.Name).GetAwaiter().GetResult();
                 var menuState = JsonConvert.DeserializeObject<MenuState>(structureString);
 
                 if (menuState.Nodes.Count > 0)
@@ -56,7 +62,17 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                             }
                             if (!string.IsNullOrEmpty(titleNodeNodes[0].Title))
                             {
-                                footer.Name = titleNodeNodes[0].Title;
+                                if (creationInfo.PersistMultiLanguageResources)
+                                {
+                                    if (UserResourceExtensions.PersistResourceValue($"FooterNavigationNode_{titleNode.Key}_{titleNodeNodes[0].Key}_Title", defaultCulture.LCID, titleNodeNodes[0].Title, creationInfo))
+                                    {
+                                        footer.Name = $"{{res:FooterNavigationNode_{titleNode.Key}_{titleNodeNodes[0].Key}_Title}}";
+                                    }
+                                }
+                                else
+                                {
+                                    footer.Name = titleNodeNodes[0].Title;
+                                }
                             }
                         }
                     }
@@ -76,14 +92,56 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 {
                     foreach (var innerMenuNode in menuNodesNode.Nodes)
                     {
-                        footer.FooterLinks.Add(ParseNodes(innerMenuNode, template, web.ServerRelativeUrl));
+                        footer.FooterLinks.Add(ParseNodes(innerMenuNode, template, web.ServerRelativeUrl, creationInfo.PersistMultiLanguageResources, defaultCulture, menuNodesNode.Key, creationInfo));
                     }
                 }
+
                 if (creationInfo.ExtractConfiguration != null && creationInfo.ExtractConfiguration.SiteFooter != null && creationInfo.ExtractConfiguration.SiteFooter.RemoveExistingNodes)
                 {
                     footer.RemoveExistingNodes = true;
                 }
+
+                if (creationInfo.PersistMultiLanguageResources)
+                {
+                    //get Titles for the rest of the Languages
+                    foreach (var language in template.SupportedUILanguages.Where(c => c.LCID != defaultCulture.LCID))
+                    {
+                        var currentCulture = new CultureInfo(language.LCID);
+                        var structureStringMUI = web.ExecuteGetAsync($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'", currentCulture.Name).GetAwaiter().GetResult();
+                        var menuStateMUI = JsonConvert.DeserializeObject<MenuState>(structureStringMUI);
+
+                        if (menuStateMUI.Nodes.Count > 0)
+                        {
+                            var titleNode = menuStateMUI.Nodes.FirstOrDefault(n => n.Title == Constants.SITEFOOTER_TITLENODEKEY);
+                            if (titleNode != null)
+                            {
+                                var titleNodeNodes = titleNode.Nodes;
+                                if (titleNodeNodes.Count > 0)
+                                {
+                                    if (!string.IsNullOrEmpty(titleNodeNodes[0].Title))
+                                    {
+                                        if (UserResourceExtensions.PersistResourceValue($"FooterNavigationNode_{titleNode.Key}_{titleNodeNodes[0].Key}_Title", currentCulture.LCID, titleNodeNodes[0].Title, creationInfo))
+                                        {
+                                            footer.Name = $"{{res:FooterNavigationNode_{titleNode.Key}_{titleNodeNodes[0].Key}_Title}}";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // find the menu Nodes
+                        
+                        var menuNodesNodeMUI = menuStateMUI.Nodes.FirstOrDefault(n => n.Title == Constants.SITEFOOTER_MENUNODEKEY);
+                        if (menuNodesNodeMUI != null)
+                        {
+                            foreach (var innerMenuNode in menuNodesNodeMUI.Nodes)
+                            {
+                               ParseNodesMUI(innerMenuNode, web.ServerRelativeUrl, currentCulture, menuNodesNode.Key, creationInfo);
+                            }
+                        }
+                    }
+                }
                 template.Footer = footer;
+
                 if (creationInfo.PersistBrandingFiles)
                 {
                     // Extract site logo if property has been set and it's not dynamic image from _api URL
@@ -233,10 +291,37 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 destination.Write(buffer, 0, bytesRead);
             } while (bytesRead != 0);
         }
-        private SiteFooterLink ParseNodes(MenuNode node, ProvisioningTemplate template, string webServerRelativeUrl)
+
+        private void ParseNodesMUI(MenuNode node, string webServerRelativeUrl, CultureInfo currentCulture, string parentKey, ProvisioningTemplateCreationInformation creationInfo)
+        {
+            UserResourceExtensions.PersistResourceValue($"FooterNavigationNode_{parentKey}_{node.Key}_Title", currentCulture.LCID, node.Title, creationInfo);
+
+            if (node.Nodes.Count > 0)
+            {
+                foreach (var childNode in node.Nodes)
+                {
+                    ParseNodesMUI(childNode, webServerRelativeUrl, currentCulture, node.Key, creationInfo);
+                }
+            }
+        }
+
+        private SiteFooterLink ParseNodes(MenuNode node, ProvisioningTemplate template, string webServerRelativeUrl, bool PersistLanguage, CultureInfo currentCulture,string parentKey, ProvisioningTemplateCreationInformation creationInfo)
         {
             var link = new SiteFooterLink();
-            link.DisplayName = node.Title;
+
+            if (PersistLanguage)
+            {
+                if (UserResourceExtensions.PersistResourceValue($"FooterNavigationNode_{parentKey}_{node.Key}_Title", currentCulture.LCID, node.Title, creationInfo))
+                {
+                    link.DisplayName = $"{{res:FooterNavigationNode_{parentKey}_{node.Key}_Title}}";
+                }
+            }
+            else
+            {
+                link.DisplayName = node.Title; 
+            }
+
+            
             link.Url = Tokenize(node.SimpleUrl, webServerRelativeUrl);
 
             if (node.Nodes.Count > 0)
@@ -244,7 +329,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 link.FooterLinks = new SiteFooterLinkCollection(template);
                 foreach (var childNode in node.Nodes)
                 {
-                    link.FooterLinks.Add(ParseNodes(childNode, template, webServerRelativeUrl));
+                    link.FooterLinks.Add(ParseNodes(childNode, template, webServerRelativeUrl,PersistLanguage, currentCulture, node.Key, creationInfo));
                 }
             }
             return link;
@@ -256,21 +341,32 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             {
                 if (template.Footer != null)
                 {
-                    web.EnsureProperty(w => w.ServerRelativeUrl);
+                    web.EnsureProperties(w => w.ServerRelativeUrl,
+                        w => w.FooterEnabled,
+                        w => w.FooterLayout,
+                        w => w.FooterEmphasis, w => w.Language);
                     web.FooterEnabled = template.Footer.Enabled;
-                    web.Update();
-                    web.Context.ExecuteQueryRetry();
+                    var defaultCulture = new CultureInfo((int)web.Language);
+
+                    var jsonRequest = new
+                    {
+                        footerEnabled = web.FooterEnabled,
+                        footerLayout = web.FooterLayout,
+                        footerEmphasis = web.FooterEmphasis
+                    };
+
+                    web.ExecutePostAsync("/_api/web/SetChromeOptions", System.Text.Json.JsonSerializer.Serialize(jsonRequest)).GetAwaiter().GetResult();
 
                     if (web.FooterEnabled)
                     {
-                        var structureString = web.ExecuteGet($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'").GetAwaiter().GetResult();
+                        var structureString = web.ExecuteGetAsync($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'", defaultCulture.Name).GetAwaiter().GetResult();
                         var menuState = JsonConvert.DeserializeObject<MenuState>(structureString);
                         if (menuState.StartingNodeKey == null)
                         {
 
                             var now = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss:Z");
-                            web.ExecutePost($"/_api/navigation/SaveMenuState", $@"{{ ""menuState"":{{ ""Version"":""{now}"",""StartingNodeTitle"":""3a94b35f-030b-468e-80e3-b75ee84ae0ad"",""SPSitePrefix"":""/"",""SPWebPrefix"":""{web.ServerRelativeUrl}"",""FriendlyUrlPrefix"":"""",""SimpleUrl"":"""",""Nodes"":[]}}}}").GetAwaiter().GetResult();
-                            structureString = web.ExecuteGet($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'").GetAwaiter().GetResult();
+                            web.ExecutePostAsync($"/_api/navigation/SaveMenuState", $@"{{ ""menuState"":{{ ""Version"":""{now}"",""StartingNodeTitle"":""3a94b35f-030b-468e-80e3-b75ee84ae0ad"",""SPSitePrefix"":""/"",""SPWebPrefix"":""{web.ServerRelativeUrl}"",""FriendlyUrlPrefix"":"""",""SimpleUrl"":"""",""Nodes"":[]}}}}", defaultCulture.Name).GetAwaiter().GetResult();
+                            structureString = web.ExecuteGetAsync($"/_api/navigation/MenuState?menuNodeKey='{Constants.SITEFOOTER_NODEKEY}'", defaultCulture.Name).GetAwaiter().GetResult();
                             menuState = JsonConvert.DeserializeObject<MenuState>(structureString);
                         }
                         var n1 = web.Navigation.GetNodeById(Convert.ToInt32(menuState.StartingNodeKey));
@@ -302,14 +398,32 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                                 Title = Constants.SITEFOOTER_MENUNODEKEY
                             });
                         }
-                        foreach (var footerLink in template.Footer.FooterLinks)
+                        if (template.Footer.FooterLinks != null && template.Footer.FooterLinks.Any())
                         {
-                            menuNode.Children.Add(new NavigationNodeCreationInformation()
+                            for (var q = template.Footer.FooterLinks.Count - 1; q >= 0; q--)
                             {
-                                Url = parser.ParseString(footerLink.Url),
-                                Title = parser.ParseString(footerLink.DisplayName)
-                            });
+                                var footerLink = template.Footer.FooterLinks[q];
+                                var newParentNode = menuNode.Children.Add(new NavigationNodeCreationInformation()
+                                {
+                                    Url = parser.ParseString(footerLink.Url),
+                                    Title = parser.ParseString(footerLink.DisplayName)
+                                });
+
+                                if (footerLink.FooterLinks != null && footerLink.FooterLinks.Any())
+                                {
+                                    for (var s = footerLink.FooterLinks.Count - 1; s >= 0; s--)
+                                    {
+                                        var childFooterLink = footerLink.FooterLinks[s];
+                                        newParentNode.Children.Add(new NavigationNodeCreationInformation()
+                                        {
+                                            Url = parser.ParseString(childFooterLink.Url),
+                                            Title = parser.ParseString(childFooterLink.DisplayName)
+                                        });
+                                    }
+                                }
+                            }
                         }
+                        
                         if (web.Context.PendingRequestCount() > 0)
                         {
                             web.Context.ExecuteQueryRetry();
@@ -355,8 +469,13 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                             }
                             else
                             {
-                                titleNode.Children[0].Title = template.Footer.Name;
+                                titleNode.Children[0].Title = parser.ParseString(template.Footer.Name);
                                 titleNode.Update();
+                                if (template.Footer.Name.ContainsResourceToken())
+                                {
+                                    web.Context.ExecuteQueryRetry();
+                                    titleNode.LocalizeNavigationNode(web, template.Footer.Name, parser, scope);
+                                }
                             }
                         }
                         else
@@ -364,7 +483,12 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                             if (!string.IsNullOrEmpty(template.Footer.Name))
                             {
                                 titleNode = n1.Children.Add(new NavigationNodeCreationInformation() { Title = Constants.SITEFOOTER_TITLENODEKEY });
-                                titleNode.Children.Add(new NavigationNodeCreationInformation() { Title = template.Footer.Name });
+                                var node=titleNode.Children.Add(new NavigationNodeCreationInformation() { Title = parser.ParseString(template.Footer.Name) });
+                                if (template.Footer.Name.ContainsResourceToken())
+                                {
+                                    web.Context.ExecuteQueryRetry();
+                                    node.LocalizeNavigationNode(web, template.Footer.Name, parser, scope);
+                                }
                             }
                         }
                         if (web.Context.PendingRequestCount() > 0)

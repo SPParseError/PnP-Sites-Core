@@ -21,6 +21,7 @@ using System.Net.Http;
 using Newtonsoft.Json.Linq;
 using OfficeDevPnP.Core.Utilities.Context;
 using System.Web;
+using System.Windows.Threading;
 
 namespace OfficeDevPnP.Core
 {
@@ -29,26 +30,36 @@ namespace OfficeDevPnP.Core
     /// </summary>
     public enum AzureEnvironment
     {
-        Production=0,
-        PPE=1,
-        China=2,
-        Germany=3,
-        USGovernment=4
+        Production = 0,
+        PPE = 1,
+        China = 2,
+        Germany = 3,
+        USGovernment = 4
     }
 
     /// <summary>
     /// This manager class can be used to obtain a SharePointContext object
     /// </summary>
     ///
-    public class AuthenticationManager
+
+    public enum KnownClientId
+    {
+        PnPManagementShell,
+        SPOManagementShell
+    }
+
+    public class AuthenticationManager : IDisposable
     {
         private const string SHAREPOINT_PRINCIPAL = "00000003-0000-0ff1-ce00-000000000000";
-
+        public const string CLIENTID_SPOMANAGEMENTSHELL = "9bc3ab49-b65d-410a-85ad-de819febfddc";
+        public const string CLIENTID_PNPMANAGEMENTSHELL = "31359c7f-bd7e-475c-86db-fdb8c937548e";
 #if !NETSTANDARD2_0
         private SharePointOnlineCredentials sharepointOnlineCredentials;
 #endif
         private string appOnlyAccessToken;
+        private AutoResetEvent appOnlyAccessTokenResetEvent = null;
         private string azureADCredentialsToken;
+        private AutoResetEvent azureADCredentialsResetEvent = null;
         private object tokenLock = new object();
         private CookieContainer fedAuth = null;
         private string _contextUrl;
@@ -57,8 +68,9 @@ namespace OfficeDevPnP.Core
         private static AuthenticationContext _authContext = null;
         private string _clientId;
         private Uri _redirectUri;
+        private bool disposedValue;
 
-#region Construction
+        #region Construction
         public AuthenticationManager()
         {
 #if !ONPREMISES
@@ -68,6 +80,24 @@ namespace OfficeDevPnP.Core
         }
         #endregion
 
+        private static string GetKnownClientId(KnownClientId id)
+        {
+            switch (id)
+            {
+                case KnownClientId.PnPManagementShell:
+                    {
+                        return CLIENTID_PNPMANAGEMENTSHELL;
+                    }
+                case KnownClientId.SPOManagementShell:
+                    {
+                        return CLIENTID_SPOMANAGEMENTSHELL;
+                    }
+                default:
+                    {
+                        return CLIENTID_SPOMANAGEMENTSHELL;
+                    }
+            }
+        }
 
         #region Authenticating against SharePoint Online using credentials or app-only
 
@@ -104,7 +134,7 @@ namespace OfficeDevPnP.Core
 
             var ctx = new ClientContext(siteUrl);
             ctx.Credentials = sharepointOnlineCredentials;
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             ctx.DisableReturnValueCache = true;
 #endif
 
@@ -151,12 +181,8 @@ namespace OfficeDevPnP.Core
         {
             EnsureToken(siteUrl, realm, appId, appSecret, acsHostUrl, globalEndPointPrefix);
             ClientContext clientContext = Utilities.TokenHelper.GetClientContextWithAccessToken(siteUrl, appOnlyAccessToken);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
-#endif
-
-#if NETSTANDARD2_0
-            clientContext.FormDigestHandlingEnabled = false;
 #endif
 
             ClientContextSettings clientContextSettings = new ClientContextSettings()
@@ -284,28 +310,76 @@ namespace OfficeDevPnP.Core
 
                         var response = Utilities.TokenHelper.GetAppOnlyAccessToken(SHAREPOINT_PRINCIPAL, new Uri(siteUrl).Authority, realm);
                         string token = response.AccessToken;
-                        ThreadPool.QueueUserWorkItem(obj =>
+
+                        try
                         {
-                            try
-                            {
-                                Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", response.ExpiresOn);
-                                var lease = GetAccessTokenLease(response.ExpiresOn);
-                                lease =
-                                    TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
-                                Thread.Sleep(lease);
-                                appOnlyAccessToken = null;
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
-                                appOnlyAccessToken = null;
-                            }
-                        });
+                            Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", response.ExpiresOn);
+                            var lease = GetAccessTokenLease(response.ExpiresOn);
+                            lease = TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
+
+
+
+                            appOnlyAccessTokenResetEvent = new AutoResetEvent(false);
+
+                            AppOnlyAccessTokenWaitInfo wi = new AppOnlyAccessTokenWaitInfo();
+
+                            wi.Handle = ThreadPool.RegisterWaitForSingleObject(appOnlyAccessTokenResetEvent,
+                                                                               new WaitOrTimerCallback(AppOnlyAccessTokenWaitProc),
+                                                                               wi,
+                                                                               (uint)lease.TotalMilliseconds,
+                                                                               true);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
+                            appOnlyAccessToken = null;
+                        }
+
+                        //ThreadPool.QueueUserWorkItem(obj =>
+                        //{
+                        //    try
+                        //    {
+                        //        Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", response.ExpiresOn);
+                        //        var lease = GetAccessTokenLease(response.ExpiresOn);
+                        //        lease =
+                        //            TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
+                        //        Thread.Sleep(lease);
+                        //        appOnlyAccessToken = null;
+                        //    }
+                        //    catch (Exception ex)
+                        //    {
+                        //        Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
+                        //        appOnlyAccessToken = null;
+                        //    }
+                        //});
+
                         appOnlyAccessToken = token;
                     }
                 }
             }
         }
+
+        internal class AppOnlyAccessTokenWaitInfo
+        {
+            public RegisteredWaitHandle Handle = null;
+        }
+
+        internal void AppOnlyAccessTokenWaitProc(object state, bool timedOut)
+        {
+            if (!timedOut)
+            {
+                AppOnlyAccessTokenWaitInfo wi = (AppOnlyAccessTokenWaitInfo)state;
+                if (wi.Handle != null)
+                {
+                    wi.Handle.Unregister(null);
+                }
+            }
+            else
+            {
+                appOnlyAccessToken = null;
+            }
+        }
+
 
         /// <summary>
         /// Get the access token lease time span.
@@ -328,12 +402,13 @@ namespace OfficeDevPnP.Core
         /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
         /// <param name="icon">Optional icon to use for the popup form</param>
         /// <param name="scriptErrorsSuppressed">Optional parameter to set WebBrowser.ScriptErrorsSuppressed value in the popup form</param>
+        /// <param name="loginRequestUri">Optional URL to use to log the user in to a specific page. If not provided, the <paramref name="siteUrl"/> will be used.</param>
         /// <returns>ClientContext to be used by CSOM code</returns>
-        public ClientContext GetWebLoginClientContext(string siteUrl, System.Drawing.Icon icon = null, bool scriptErrorsSuppressed = true)
+        public ClientContext GetWebLoginClientContext(string siteUrl, System.Drawing.Icon icon = null, bool scriptErrorsSuppressed = true, Uri loginRequestUri = null)
         {
             var authCookiesContainer = new CookieContainer();
             var siteUri = new Uri(siteUrl);
-
+            
             var thread = new Thread(() =>
             {
                 var form = new System.Windows.Forms.Form();
@@ -354,11 +429,11 @@ namespace OfficeDevPnP.Core
                 form.Controls.Add(browser);
                 form.ResumeLayout(false);
 
-                browser.Navigate(siteUri);
+                browser.Navigate(loginRequestUri ?? siteUri);
 
                 browser.Navigated += (sender, args) =>
                 {
-                    if (siteUri.Host.Equals(args.Url.Host))
+                    if ((loginRequestUri ?? siteUri).Host.Equals(args.Url.Host))
                     {
                         var cookieString = CookieReader.GetCookie(siteUrl).Replace("; ", ",").Replace(";", ",");
 
@@ -368,20 +443,24 @@ namespace OfficeDevPnP.Core
                         if (Regex.IsMatch(cookieString, "FedAuth", RegexOptions.IgnoreCase))
                         {
                             authCookies = cookieString.Split(',').Where(c => c.StartsWith("FedAuth", StringComparison.InvariantCultureIgnoreCase) || c.StartsWith("rtFa", StringComparison.InvariantCultureIgnoreCase));
-                        } else if (Regex.IsMatch(cookieString, "EdgeAccessCookie", RegexOptions.IgnoreCase))
+                        }
+                        else if (Regex.IsMatch(cookieString, "EdgeAccessCookie", RegexOptions.IgnoreCase))
                         {
                             authCookies = cookieString.Split(',').Where(c => c.StartsWith("EdgeAccessCookie", StringComparison.InvariantCultureIgnoreCase));
                         }
                         if (authCookies != null)
                         {
-                            authCookiesContainer.SetCookies(siteUri, string.Join(",", authCookies));
+                            // Set the authentication cookies both on the SharePoint Online Admin as well as on the SharePoint Online domains to allow for APIs on both domains to be used
+                            var authCookiesString = string.Join(",", authCookies);
+                            authCookiesContainer.SetCookies(siteUri, authCookiesString);
+                            authCookiesContainer.SetCookies(new Uri(siteUri.Scheme + "://" + siteUri.Authority.Replace(".sharepoint.com", "-admin.sharepoint.com")), authCookiesString);
                             form.Close();
                         }
                     }
                 };
 
                 form.Focus();
-                form.ShowDialog();
+                form.ShowDialog();                
                 browser.Dispose();
             });
 
@@ -392,19 +471,29 @@ namespace OfficeDevPnP.Core
             if (authCookiesContainer.Count > 0)
             {
                 var ctx = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
                 ctx.DisableReturnValueCache = true;
 #endif
                 ctx.ExecutingWebRequest += (sender, e) => e.WebRequestExecutor.WebRequest.CookieContainer = authCookiesContainer;
+
+                ClientContextSettings clientContextSettings = new ClientContextSettings()
+                {
+                    Type = ClientContextType.Cookie,
+                    SiteUrl = siteUrl,
+                    AuthenticationManager = this
+                };
+
+                ctx.AddContextSettings(clientContextSettings);
+
                 return ctx;
             }
 
             return null;
         }
 #endif
-#endregion
+        #endregion
 
-#region Authenticating against SharePoint on-premises using credentials
+        #region Authenticating against SharePoint on-premises using credentials
         /// <summary>
         /// Returns a SharePoint on-premises / SharePoint Online Dedicated ClientContext object
         /// </summary>
@@ -417,7 +506,7 @@ namespace OfficeDevPnP.Core
         {
             ClientContext clientContext = new ClientContext(siteUrl)
             {
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
                 DisableReturnValueCache = true,
 #endif
                 Credentials = new NetworkCredential(user, password, domain)
@@ -437,7 +526,7 @@ namespace OfficeDevPnP.Core
         {
             ClientContext clientContext = new ClientContext(siteUrl)
             {
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
                 DisableReturnValueCache = true,
 #endif
                 Credentials = new NetworkCredential(user, password, domain)
@@ -511,7 +600,7 @@ namespace OfficeDevPnP.Core
         {
             var siteUri = new Uri(siteUrl);
             var clientContext = new ClientContext(siteUri);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
 
@@ -610,7 +699,7 @@ namespace OfficeDevPnP.Core
         {
             var siteUri = new Uri(siteUrl);
             var clientContext = new ClientContext(siteUri);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
 
@@ -631,34 +720,35 @@ namespace OfficeDevPnP.Core
         }
 #endif
 
-#endregion
+        #endregion
 
-#region Authenticating against SharePoint Online using Azure AD based authentication
+        #region Authenticating against SharePoint Online using Azure AD based authentication
 #if !ONPREMISES
 
         /// <summary>
-        /// Returns a SharePoint ClientContext using Azure Active Directory credential authentication. This depends on the SPO Management Shell app being registered in your Azure AD.
+        /// Returns a SharePoint ClientContext using Azure Active Directory credential authentication. This depends on the SPO Management Shell app or the PnP Management Shell app being registered in your Azure AD.
         /// </summary>
         /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
         /// <param name="userPrincipalName">The user id</param>
         /// <param name="userPassword">The user's password as a secure string</param>
         /// <param name="environment">SharePoint environment being used</param>
+        /// <param name="clientId">Enum value pointing to one of the known client ids</param>
         /// <returns>Client context object</returns>
-        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, SecureString userPassword, AzureEnvironment environment = AzureEnvironment.Production)
+        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, SecureString userPassword, AzureEnvironment environment = AzureEnvironment.Production, KnownClientId clientId = KnownClientId.SPOManagementShell)
         {
             string password = new System.Net.NetworkCredential(string.Empty, userPassword).Password;
-            return GetAzureADCredentialsContext(siteUrl, userPrincipalName, password, environment);
+            return GetAzureADCredentialsContext(siteUrl, userPrincipalName, password, environment, clientId);
         }
 
         /// <summary>
-        /// Returns a SharePoint ClientContext using Azure Active Directory credential authentication. This depends on the SPO Management Shell app being registered in your Azure AD.
+        /// Returns a SharePoint ClientContext using Azure Active Directory credential authentication. This depends on the SPO Management Shell app or the PnP Management Shell app being registered in your Azure AD.
         /// </summary>
         /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
         /// <param name="userPrincipalName">The user id</param>
         /// <param name="userPassword">The user's password as a string</param>
         /// <param name="environment">SharePoint environment being used</param>
         /// <returns>Client context object</returns>
-        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, string userPassword, AzureEnvironment environment = AzureEnvironment.Production)
+        public ClientContext GetAzureADCredentialsContext(string siteUrl, string userPrincipalName, string userPassword, AzureEnvironment environment = AzureEnvironment.Production, KnownClientId clientId = KnownClientId.SPOManagementShell)
         {
             Log.Info(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManager_GetContext, siteUrl);
             Log.Debug(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManager_TenantUser, userPrincipalName);
@@ -667,12 +757,12 @@ namespace OfficeDevPnP.Core
             string resourceUri = spUri.Scheme + "://" + spUri.Authority;
 
             var clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
             clientContext.ExecutingWebRequest += (sender, args) =>
             {
-                EnsureAzureADCredentialsToken(resourceUri, userPrincipalName, userPassword, environment);
+                EnsureAzureADCredentialsToken(resourceUri, userPrincipalName, userPassword, environment, clientId);
                 args.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + azureADCredentialsToken;
             };
 
@@ -691,19 +781,29 @@ namespace OfficeDevPnP.Core
         }
 
         /// <summary>
-        /// Acquires an access token using Azure AD credential flow. This depends on the SPO Management Shell app being registered in your Azure AD.
+        /// Acquires an access token using Azure AD credential flow. This depends on the SPO Management Shell app or the PnP Management Shell app  being registered in your Azure AD.
         /// </summary>
         /// <param name="resourceUri">Resouce to request access for</param>
         /// <param name="username">User id</param>
         /// <param name="password">Password</param>
         /// <param name="environment">SharePoint environment being used</param>
+        /// <param name="clientId">Defaults to the SPO Management Shell client id. Alternatively provide the CLIENTID_PNPMANAGEMENTSHELL or your own client with appropriate permission scopes configured.</param>
         /// <returns>Acces token</returns>
-        public static async Task<string> AcquireTokenAsync(string resourceUri, string username, string password, AzureEnvironment environment)
+        public static async Task<string> AcquireTokenAsync(string resourceUri, string username, string password, AzureEnvironment environment, string clientId = null)
+        {
+            return await AcquireTokenAsync(resourceUri, username, password, environment, clientId, null);
+        }
+
+        public static async Task<string> AcquireTokenAsync(string resourceUri, string username, string password, AzureEnvironment environment, string clientId = null, Action<string> errorCallback = null)
         {
             HttpClient client = new HttpClient();
             string tokenEndpoint = $"{new AuthenticationManager().GetAzureADLoginEndPoint(environment)}/common/oauth2/token";
 
-            var body = $"resource={resourceUri}&client_id=9bc3ab49-b65d-410a-85ad-de819febfddc&grant_type=password&username={HttpUtility.UrlEncode(username)}&password={HttpUtility.UrlEncode(password)}";
+            if (clientId == null)
+            {
+                clientId = GetKnownClientId(KnownClientId.SPOManagementShell);
+            }
+            var body = $"resource={resourceUri}&client_id={clientId}&grant_type=password&username={HttpUtility.UrlEncode(username)}&password={HttpUtility.UrlEncode(password)}";
             var stringContent = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
 
             var result = await client.PostAsync(tokenEndpoint, stringContent).ContinueWith<string>((response) =>
@@ -714,13 +814,17 @@ namespace OfficeDevPnP.Core
             JObject jobject = JObject.Parse(result);
 
             // Ensure the resulting JSON could be parsed and that it doesn't contain an error. If incorrect credentials have been provided, this will not be the case and we return NULL to indicate not to have an access token.
-            if (jobject == null || jobject["error"] != null) return null;
+            if (jobject == null || jobject["error"] != null)
+            {
+                var error = jobject["error"];
+
+            }
 
             var token = jobject["access_token"].Value<string>();
             return token;
         }
 
-        private void EnsureAzureADCredentialsToken(string resourceUri, string userPrincipalName, string userPassword, AzureEnvironment environment)
+        private void EnsureAzureADCredentialsToken(string resourceUri, string userPrincipalName, string userPassword, AzureEnvironment environment, KnownClientId clientId = KnownClientId.SPOManagementShell)
         {
             if (azureADCredentialsToken == null)
             {
@@ -728,29 +832,74 @@ namespace OfficeDevPnP.Core
                 {
                     if (azureADCredentialsToken == null)
                     {
+                        var clientIdString = GetKnownClientId(clientId);
+                        string accessToken = Task.Run(() => AcquireTokenAsync(resourceUri, userPrincipalName, userPassword, environment, clientIdString)).GetAwaiter().GetResult();
+                        //ThreadPool.QueueUserWorkItem(obj =>
+                        //{
+                        //    try
+                        //    {
+                        //        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(accessToken);
+                        //        Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", token.ValidTo);
+                        //        var lease = GetAccessTokenLease(token.ValidTo);
+                        //        lease =
+                        //            TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
+                        //        Thread.Sleep(lease);
+                        //        azureADCredentialsToken = null;
+                        //    }
+                        //    catch (Exception ex)
+                        //    {
+                        //        Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
+                        //        azureADCredentialsToken = null;
+                        //    }
+                        //});
 
-                        String accessToken = Task.Run(() => AcquireTokenAsync(resourceUri, userPrincipalName, userPassword, environment)).GetAwaiter().GetResult();
-                        ThreadPool.QueueUserWorkItem(obj =>
+                        try
                         {
-                            try
-                            {
-                                var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(accessToken);
-                                Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", token.ValidTo);
-                                var lease = GetAccessTokenLease(token.ValidTo);
-                                lease =
-                                    TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
-                                Thread.Sleep(lease);
-                                azureADCredentialsToken = null;
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
-                                azureADCredentialsToken = null;
-                            }
-                        });
+                            var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(accessToken);
+                            Log.Debug(Constants.LOGGING_SOURCE, "Lease expiration date: {0}", token.ValidTo);
+                            var lease = GetAccessTokenLease(token.ValidTo);
+                            lease = TimeSpan.FromSeconds(lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds > 0 ? lease.TotalSeconds - TimeSpan.FromMinutes(5).TotalSeconds : lease.TotalSeconds);
+
+                            azureADCredentialsResetEvent = new AutoResetEvent(false);
+
+                            AzureADCredentialsTokenWaitInfo wi = new AzureADCredentialsTokenWaitInfo();
+
+                            wi.Handle = ThreadPool.RegisterWaitForSingleObject(azureADCredentialsResetEvent,
+                                                                               new WaitOrTimerCallback(AzureADCredentialsTokenWaitProc),
+                                                                               wi,
+                                                                               (uint)lease.TotalMilliseconds,
+                                                                               true);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(Constants.LOGGING_SOURCE, CoreResources.AuthenticationManger_ProblemDeterminingTokenLease, ex);
+                            azureADCredentialsToken = null;
+                        }
+
                         azureADCredentialsToken = accessToken;
                     }
                 }
+            }
+        }
+
+        internal class AzureADCredentialsTokenWaitInfo
+        {
+            public RegisteredWaitHandle Handle = null;
+        }
+
+        internal void AzureADCredentialsTokenWaitProc(object state, bool timedOut)
+        {
+            if (!timedOut)
+            {
+                AzureADCredentialsTokenWaitInfo wi = (AzureADCredentialsTokenWaitInfo)state;
+                if (wi.Handle != null)
+                {
+                    wi.Handle.Unregister(null);
+                }
+            }
+            else
+            {
+                azureADCredentialsToken = null;
             }
         }
 
@@ -801,7 +950,7 @@ namespace OfficeDevPnP.Core
         public ClientContext GetAzureADWebApplicationAuthenticatedContext(String siteUrl, Func<String, String> accessTokenGetter)
         {
             var clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
             clientContext.ExecutingWebRequest += (sender, args) =>
@@ -825,7 +974,7 @@ namespace OfficeDevPnP.Core
         public ClientContext GetAzureADAccessTokenAuthenticatedContext(String siteUrl, String accessToken)
         {
             var clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
 
@@ -979,8 +1128,11 @@ namespace OfficeDevPnP.Core
         /// <returns></returns>
         public ClientContext GetAzureADAppOnlyAuthenticatedContext(string siteUrl, string clientId, string tenant, X509Certificate2 certificate, AzureEnvironment environment = AzureEnvironment.Production)
         {
+            LoggerCallbackHandler.UseDefaultLogging = false;
+
+
             var clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
 
@@ -1015,6 +1167,58 @@ namespace OfficeDevPnP.Core
 
             return clientContext;
         }
+
+#if !NETSTANDARD2_0
+        /// <summary>
+        /// Returns a SharePoint ClientContext using Azure Active Directory App Only Authentication. This requires that you have a certificated created, and updated the key credentials key in the application manifest in the azure AD accordingly.
+        /// </summary>
+        /// <param name="siteUrl">Site for which the ClientContext object will be instantiated</param>
+        /// <param name="clientId">The Azure AD Application Client ID</param>
+        /// <param name="tenant">The Azure AD Tenant, e.g. mycompany.onmicrosoft.com</param>
+        /// <param name="clientAssertionCertificate">IClientAssertionCertificate used to authenticate</param>
+        /// <param name="environment">SharePoint environment being used</param>
+        /// <returns></returns>
+        public ClientContext GetAzureADAppOnlyAuthenticatedContext(string siteUrl, string clientId, string tenant, IClientAssertionCertificate clientAssertionCertificate, AzureEnvironment environment = AzureEnvironment.Production)
+        {
+            var clientContext = new ClientContext(siteUrl);
+#if !ONPREMISES || SP2016 || SP2019
+            clientContext.DisableReturnValueCache = true;
+#endif
+
+            string authority = string.Format(CultureInfo.InvariantCulture, "{0}/{1}/", GetAzureADLoginEndPoint(environment), tenant);
+
+            var authContext = new AuthenticationContext(authority);
+
+            //var clientAssertionCertificate = new ClientAssertionCertificate(clientId, certificate);
+
+            var host = new Uri(siteUrl);
+
+            clientContext.ExecutingWebRequest += (sender, args) =>
+            {
+                var ar = Task.Run(() => authContext
+                    .AcquireTokenAsync(host.Scheme + "://" + host.Host + "/", clientAssertionCertificate))
+                    .GetAwaiter().GetResult();
+                args.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + ar.AccessToken;
+            };
+
+            ClientContextSettings clientContextSettings = new ClientContextSettings()
+            {
+                Type = ClientContextType.AzureADCertificate,
+                SiteUrl = siteUrl,
+                AuthenticationManager = this,
+                ClientId = clientId,
+                Tenant = tenant,
+                ClientAssertionCertificate = clientAssertionCertificate,
+                Environment = environment
+            };
+
+            clientContext.AddContextSettings(clientContextSettings);
+
+            return clientContext;
+        }
+#endif
+
+
 
         /// <summary>
         /// Get's the Azure AD login end point for the given environment
@@ -1051,10 +1255,32 @@ namespace OfficeDevPnP.Core
                     }
             }
         }
-#endregion
+
+        public static string GetSharePointDomainSuffix(AzureEnvironment environment)
+        {
+            if (environment == AzureEnvironment.Production)
+            {
+                return "com";
+            }
+            else if (environment == AzureEnvironment.USGovernment)
+            {
+                return "us";
+            }
+            else if (environment == AzureEnvironment.Germany)
+            {
+                return "de";
+            }
+            else if (environment == AzureEnvironment.China)
+            {
+                return "cn";
+            }
+
+            return "com";
+        }
+        #endregion
 
 #if !NETSTANDARD2_0
-#region Authenticating against SharePoint on-premises using ADFS based authentication
+        #region Authenticating against SharePoint on-premises using ADFS based authentication
         /// <summary>
         /// Returns a SharePoint on-premises ClientContext for sites secured via ADFS
         /// </summary>
@@ -1070,7 +1296,7 @@ namespace OfficeDevPnP.Core
         {
 
             ClientContext clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
             clientContext.ExecutingWebRequest += delegate (object oSender, WebRequestEventArgs webRequestEventArgs)
@@ -1127,7 +1353,7 @@ namespace OfficeDevPnP.Core
         public ClientContext GetADFSCertificateMixedAuthenticationContext(string siteUrl, string serialNumber, string sts, string idpId, int logonTokenCacheExpirationWindow = 10)
         {
             ClientContext clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
             clientContext.ExecutingWebRequest += delegate (object oSender, WebRequestEventArgs webRequestEventArgs)
@@ -1182,7 +1408,7 @@ namespace OfficeDevPnP.Core
         public ClientContext GetADFSKerberosMixedAuthenticationContext(string siteUrl, string sts, string idpId, int logonTokenCacheExpirationWindow = 10)
         {
             ClientContext clientContext = new ClientContext(siteUrl);
-#if !ONPREMISES || SP2016 || SP2019
+#if !SP2013
             clientContext.DisableReturnValueCache = true;
 #endif
             clientContext.ExecutingWebRequest += delegate (object oSender, WebRequestEventArgs webRequestEventArgs)
@@ -1263,7 +1489,38 @@ namespace OfficeDevPnP.Core
             }
         }
 
-#endregion
+
+
+        #endregion
 #endif
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposedValue)
+            {
+                if (disposing)
+                {
+                    if (appOnlyAccessTokenResetEvent != null)
+                    {
+                        appOnlyAccessTokenResetEvent.Set();
+                        appOnlyAccessTokenResetEvent?.Dispose();
+                    }
+
+                    if (azureADCredentialsResetEvent != null)
+                    {
+                        azureADCredentialsResetEvent.Set();
+                        azureADCredentialsResetEvent?.Dispose();
+                    }
+                }
+
+                disposedValue = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
     }
 }
