@@ -24,7 +24,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             {
                 var context = web.Context as ClientContext;
 
-                web.EnsureProperties(w => w.ServerRelativeUrl, w => w.RootFolder.WelcomePage);
+                web.EnsureProperties(w => w.ServerRelativeUrl, w => w.RootFolder, w => w.RootFolder.WelcomePage);
 
                 // Check if this is not a noscript site as we're not allowed to update some properties
                 bool isNoScriptSite = web.IsNoScriptSite();
@@ -202,7 +202,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                     {
                         web.Context.Load(file.ListItemAllFields);
                         web.Context.ExecuteQueryRetry();
-                        file.ListItemAllFields.SetSecurity(parser, page.Security);
+                        file.ListItemAllFields.SetSecurity(parser, page.Security, WriteMessage);
                     }
                 }
             }

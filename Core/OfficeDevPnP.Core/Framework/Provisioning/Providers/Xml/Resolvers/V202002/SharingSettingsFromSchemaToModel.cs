@@ -19,11 +19,11 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.Providers.Xml.Resolvers.V2020
 
         public object Resolve(object source, Dictionary<string, IResolver> resolvers = null, bool recursive = false)
         {
-            var result = new Model.SharingSettings();
             var settings = source.GetPublicInstancePropertyValue("SharingSettings");
 
             if (null != settings)
             {
+                Model.SharingSettings result = new Model.SharingSettings();
                 PnPObjectsMapper.MapProperties(settings, result, resolvers, recursive);
 
                 var allowedDomainList = (String)settings.GetPublicInstancePropertyValue("AllowedDomainList");
@@ -36,6 +36,8 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.Providers.Xml.Resolvers.V2020
                 {
                     result.BlockedDomainList.AddRange(blockedDomainList.Split(','));
                 }
+
+                return result;
             }
 
             return (null);

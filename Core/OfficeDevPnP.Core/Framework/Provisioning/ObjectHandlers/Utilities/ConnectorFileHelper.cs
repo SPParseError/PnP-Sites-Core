@@ -30,8 +30,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers.Utilities
                     {
                         container = container.TrimStart("/".ToCharArray());
                     }
-
-#if !NETSTANDARD2_0
+#if !ONPREMISES
                     if (connector.GetType() == typeof(Connectors.AzureStorageConnector))
                     {
                         if (connector.GetContainer().EndsWith("/"))
@@ -64,6 +63,10 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers.Utilities
                 fileName = WebUtility.UrlDecode(fileName);
                 stream = connector.GetFileStream(fileName, container);
             }
+
+            if (stream == null)
+                throw new ArgumentException($"The specified filename '{fileName}' cannot be found");
+
             byte[] returnData;
 
             using (var memStream = new MemoryStream())

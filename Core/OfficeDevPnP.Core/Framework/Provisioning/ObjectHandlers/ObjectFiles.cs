@@ -92,7 +92,12 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                     }
 
                     var folder = web.EnsureFolderPath(folderName);
-
+#if !SP2013
+                    //register folder UniqueId as Token
+                    folder.EnsureProperties(p => p.UniqueId, p => p.ServerRelativeUrl);
+                    parser.AddToken(new FileUniqueIdToken(web, folder.ServerRelativeUrl.Substring(web.ServerRelativeUrl.Length).TrimStart("/".ToCharArray()), folder.UniqueId));
+                    parser.AddToken(new FileUniqueIdEncodedToken(web, folder.ServerRelativeUrl.Substring(web.ServerRelativeUrl.Length).TrimStart("/".ToCharArray()), folder.UniqueId));
+#endif
                     var checkedOut = false;
 
                     var targetFile = folder.GetFile(template.Connector.GetFilenamePart(targetFileName));
@@ -216,7 +221,7 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                         if (file.Security != null &&
                             (file.Security.ClearSubscopes == true || file.Security.CopyRoleAssignments == true || file.Security.RoleAssignments.Count > 0))
                         {
-                            targetFile.ListItemAllFields.SetSecurity(parser, file.Security);
+                            targetFile.ListItemAllFields.SetSecurity(parser, file.Security, WriteMessage);
                         }
                     }
 
@@ -249,7 +254,11 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
             catch (ServerException ex)
             {
                 // Handling the exception stating the "The object specified does not belong to a list."
+#if !ONPREMISES
+                if (ex.ServerErrorCode != -2113929210)
+#else
                 if (ex.ServerErrorCode != -2146232832)
+#endif
                 {
                     throw;
                 }
@@ -286,7 +295,11 @@ namespace OfficeDevPnP.Core.Framework.Provisioning.ObjectHandlers
                 catch (ServerException ex)
                 {
                     // If this throws ServerException (does not belong to list), then shouldn't be trying to set properties)
+#if !ONPREMISES
+                    if (ex.ServerErrorCode != -2113929210)
+#else
                     if (ex.ServerErrorCode != -2146232832)
+#endif
                     {
                         throw;
                     }

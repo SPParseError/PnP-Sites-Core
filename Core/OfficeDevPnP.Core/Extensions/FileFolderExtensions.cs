@@ -409,7 +409,7 @@ namespace Microsoft.SharePoint.Client
             var listItem = folder.ListItemAllFields;
 
             // If already a document set, just return the folder
-            if (listItem["ContentTypeId"].ToString() == BuiltInContentTypeId.Folder) return folder;
+            if (listItem["ContentTypeId"].ToString().StartsWith(BuiltInContentTypeId.DocumentSet)) return folder;
             listItem["ContentTypeId"] = BuiltInContentTypeId.DocumentSet;
 
             // Add missing properties            
@@ -1052,7 +1052,8 @@ namespace Microsoft.SharePoint.Client
                 Folder nextFolder = null;
                 foreach (Folder existingFolder in folderCollection)
                 {
-                    if (string.Equals(existingFolder.Name, System.Net.WebUtility.UrlDecode(folderName), StringComparison.InvariantCultureIgnoreCase))
+                    //System.Net.WebUtility.UrlDecode removes + from folderName which leads to invalid compare if folderName was not UrlEncoded 
+                    if (string.Equals(existingFolder.Name, System.Net.WebUtility.UrlDecode(folderName), StringComparison.InvariantCultureIgnoreCase)|| string.Equals(existingFolder.Name, folderName, StringComparison.InvariantCultureIgnoreCase))
                     {
                         nextFolder = existingFolder;
                         break;
@@ -2175,7 +2176,11 @@ namespace Microsoft.SharePoint.Client
                 {
                     // If this throws ServerException (does not belong to list), then shouldn't be trying to set properties)
                     // Handling the exception stating the "The object specified does not belong to a list."
+#if !ONPREMISES
+                    if (ex.ServerErrorCode != -2113929210)
+#else
                     if (ex.ServerErrorCode != -2146232832)
+#endif
                     {
                         throw;
                     }
@@ -2391,7 +2396,11 @@ namespace Microsoft.SharePoint.Client
                     catch (ServerException ex)
                     {
                         // Handling the exception stating the "The object specified does not belong to a list."
+#if !ONPREMISES
+                        if (ex.ServerErrorCode != -2113929210)
+#else
                         if (ex.ServerErrorCode != -2146232832)
+#endif
                         {
                             // TODO Replace this with an errorcode as well, does not work with localized o365 tenants
                             if (ex.Message.StartsWith("Cannot invoke method or retrieve property from null object. Object returned by the following call stack is null.") &&
